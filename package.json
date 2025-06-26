@@ -1,0 +1,25 @@
+{
+  "name": "invoice-cert-app",
+  "version": "1.0.0",
+  "description": "Invoice Certification App for Amid Technologies",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd server && uvicorn main:app --host 0.0.0.0 --port 8000 --reload",
+    "client": "cd client && npm start",
+    "install-all": "npm install && cd server && pip install -r requirements.txt && cd ../client && npm install",
+    "build": "cd client && npm run build",
+    "test": "cd client && npm test"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "invoice",
+    "certification",
+    "ocr",
+    "pdf"
+  ],
+  "author": "Amid Technologies",
+  "license": "MIT"
+}

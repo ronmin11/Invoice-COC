@@ -1,0 +1,28 @@
+import logo from './assets/amid-logo.png'; 
+
+page.drawText("Manufacturer's Representative", { x: leftX, y: 90, size: 12, font, color: black }); 
+
+type Item = {
+  description: string;
+  qty: number;
+  rate: number;
+  amount: number;
+};
+
+const [formData, setFormData] = useState<{
+  customer: string;
+  poNumber: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate: string;
+  items: Item[];
+  total: string;
+}>({
+  customer: '',
+  poNumber: '',
+  invoiceNumber: '',
+  invoiceDate: '',
+  dueDate: '',
+  items: [],
+  total: '',
+}); 
