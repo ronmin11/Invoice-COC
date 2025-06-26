@@ -23,6 +23,8 @@ from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
 import io
 import logging
 from reportlab.platypus.flowables import Flowable
+from reportlab.platypus import Table, TableStyle, Spacer as RLSpacer
+from reportlab.platypus import KeepTogether
 
 app = FastAPI(title="Invoice Certification API", version="1.0.0")
 
@@ -246,65 +248,176 @@ async def generate_certificate(invoice_data: Dict[str, Any]):
     """Generate a redesigned, professional compliance certificate PDF."""
     try:
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=0.75*inch, leftMargin=0.75*inch, topMargin=0.5*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=0.75*inch, leftMargin=0.5*inch, topMargin=0.5*inch, bottomMargin=0.5*inch)
         styles = getSampleStyleSheet()
         story: list[Flowable] = []
 
-        # --- 1. Header Section ---
-        header_right_style = ParagraphStyle(name='HeaderRight', parent=styles['Normal'], alignment=TA_CENTER, fontSize=12, leading=14, spaceAfter=36)
+        # Calculate total quantity from line items
+        total_quantity = 0
+        if invoice_data.get("items"):
+            for item in invoice_data["items"]:
+                try:
+                    qty = float(item.get("qty", 0))
+                    total_quantity += qty
+                except (ValueError, TypeError):
+                    pass
+
+        # Extract shipping date (month and year) from due date
+        shipping_date = "N/A"
+        due_date = invoice_data.get('due_date', '')
+        if due_date:
+            try:
+                # Try to parse the due date and extract month/year
+                from datetime import datetime
+                # Handle common date formats
+                for fmt in ['%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y']:
+                    try:
+                        parsed_date = datetime.strptime(due_date, fmt)
+                        shipping_date = parsed_date.strftime('%B %Y')
+                        break
+                    except ValueError:
+                        continue
+            except Exception:
+                shipping_date = "N/A"
+
+        # --- 0. Logo at Top Left, Title/Date Centered on Same Row ---
+        logo_path = os.path.join(os.path.dirname(__file__), 'amid-logo.jpeg')
+        max_logo_width = 1.2*inch
+        max_logo_height = 1.0*inch
+        if os.path.exists(logo_path):
+            pil_img = PILImage.open(logo_path)
+            w, h = pil_img.size
+            aspect = w / h
+            # Scale proportionally
+            logo_width = min(max_logo_width, max_logo_height * aspect)
+            logo_height = logo_width / aspect
+            if logo_height > max_logo_height:
+                logo_height = max_logo_height
+                logo_width = logo_height * aspect
+            logo_img = Image(logo_path, width=logo_width, height=logo_height)
+        else:
+            logo_width = max_logo_width
+            logo_img = Spacer(logo_width, max_logo_height)
+
+        # --- 1. Title/Date Centered ---
+        right_spacer = Spacer(logo_width, max_logo_height)
+        page_width = letter[0]
+        left_margin = 0.5*inch
+        right_margin = 0.75*inch
+        printable_width = page_width - left_margin - right_margin
+        center_col_width = printable_width - 2 * logo_width
+        header_right_style = ParagraphStyle(name='HeaderRight', parent=styles['Normal'], alignment=TA_CENTER, fontSize=14, leading=16)
         header_right_text = f"<b>Certificate of Compliance</b><br/><b>Date: {invoice_data.get('date', 'N/A')}</b>"
-        story.append(Paragraph(header_right_text, header_right_style))
-        
+        header_para = Paragraph(header_right_text, header_right_style)
+        header_para_box = [RLSpacer(1, 0.3*inch), header_para]
+        header_table = Table(
+            [[logo_img, header_para_box, right_spacer]],
+            colWidths=[logo_width, center_col_width, logo_width],
+            hAlign='LEFT'
+        )
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (0, 0), 'TOP'),
+            ('VALIGN', (1, 0), (1, 0), 'TOP'),
+            ('VALIGN', (2, 0), (2, 0), 'TOP'),
+            ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header_table)
+        story.append(Spacer(1, 0.5*inch))
+
         # --- 2. Customer and PO Details ---
         details_style = ParagraphStyle(name='DetailsStyle', parent=styles['Normal'], spaceAfter=6)
         story.append(Paragraph(f"<b>Customer:</b> {invoice_data.get('vendor_name', 'N/A')}", details_style))
         story.append(Paragraph(f"<b>Customer Purchase Order No:</b> {invoice_data.get('po_number', 'N/A')}", details_style))
+        story.append(Paragraph(f"<b>Customer Purchase Number:</b> {invoice_data.get('customer_purchase_number', 'N/A')}", details_style))
+        story.append(Paragraph(f"<b>Shipping Date:</b> {shipping_date}", details_style))
+        story.append(Paragraph(f"<b>Total Quantity:</b> {total_quantity:,.0f}", details_style))
         story.append(Spacer(1, 0.25*inch))
         
         # --- 3. Certification Text (Part 1) ---
         body_style = ParagraphStyle(name='BodyStyle', parent=styles['Normal'], spaceAfter=12)
-        story.append(Paragraph(
+        certification_text = (
             "We certify that all materials, and products listed below have been assembled, produced, "
             "inspected, and tested in full accordance with all applicable specifications, drawings, and "
             "other purchase requirements. Test reports and/or suitable evidence of compliance are on file "
-            "and are available from the manufacturer.", body_style
-        ))
+            "and are available from the manufacturer. "
+            "Amid Technologies has established a known chain of custody for the material originating from the OEM."
+        )
+        story.append(Paragraph(certification_text, body_style))
         story.append(Spacer(1, 0.25*inch))
 
-        # --- 4. Line Items Table ---
+        # --- 4. Line Items Table (Single Table Format) ---
+        product_table_data = [
+            [
+                Paragraph('<b>Product Code</b>', styles['Normal']),
+                Paragraph('<b>Description</b>', styles['Normal']),
+                Paragraph('<b>Quantity</b>', styles['Normal']),
+                Paragraph('<b>Date Code</b>', styles['Normal'])
+            ]
+        ]
         if invoice_data.get("items"):
-            items_data = [[Paragraph(h, styles['Normal']) for h in ["Product Code", "Description", "Quantity"]]]
             for item in invoice_data["items"]:
-                items_data.append([
+                product_table_data.append([
                     Paragraph(item.get("product_code", ""), styles['Normal']),
                     Paragraph(item.get("description", ""), styles['Normal']),
-                    Paragraph(f"{item.get('qty', 0):,}", styles['Normal'])
+                    Paragraph(f"{item.get('qty', 0):,}", styles['Normal']),
+                    Paragraph(item.get("date_code", ""), styles['Normal'])
                 ])
-            
-            items_table = Table(items_data, colWidths=[2*inch, 4*inch, 1*inch])
-            items_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('ALIGN', (2, 1), (2, -1), 'RIGHT'), # Right-align quantity column
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ]))
-            story.append(items_table)
-            story.append(Spacer(1, 0.5*inch))
+        product_table = Table(product_table_data, colWidths=[2.2*inch, 3.2*inch, 1.0*inch, 1.1*inch], hAlign='LEFT')
+        product_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (2, 1), (2, -1), 'RIGHT'),
+            ('ALIGN', (0, 1), (1, -1), 'LEFT'),
+            ('ALIGN', (3, 1), (3, -1), 'LEFT'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ]))
+        story.append(product_table)
+        story.append(Spacer(1, 0.25*inch))
 
-        # --- 5. Certification Text (Part 2) & Signature ---
-        story.append(Paragraph(
-            "Amid Technologies has established a known chain of custody for the material originating from the OEM.", body_style
-        ))
-        story.append(Spacer(1, 1.25*inch))
-        
-        signature_style = ParagraphStyle(name='SignatureStyle', parent=styles['Normal'], alignment=TA_CENTER)
-        story.append(Paragraph("Dima Minin", signature_style))
-        story.append(Paragraph("____________________________", signature_style))
-        story.append(Paragraph("Amid Technologies Inc", signature_style))
-        story.append(Paragraph("<b>Manufacturer's Representative</b>", signature_style))
+        # --- 5. Signature Block ---
+        signature_style = ParagraphStyle(name='SignatureStyle', parent=styles['Normal'], alignment=TA_CENTER, spaceAfter=0, spaceBefore=0, leading=10)
+        # Use a single table for the signature block to control spacing tightly
+        signature_table = Table([
+            [Paragraph("Dima Minin", signature_style)],
+            [Paragraph("____________________________", signature_style)],
+            [Paragraph("Amid Technologies Inc", signature_style)],
+            [Paragraph("<b>Manufacturer's Representative</b>", signature_style)]
+        ], colWidths=[3*inch], hAlign='CENTER', style=TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+            ('TOPPADDING', (0, 0), (0, 0), 0),
+            ('BOTTOMPADDING', (0, 0), (0, 0), 0),
+            ('TOPPADDING', (0, 1), (0, 1), 0),
+            ('BOTTOMPADDING', (0, 1), (0, 1), 0),
+            ('TOPPADDING', (0, 2), (0, 2), 6),
+            ('BOTTOMPADDING', (0, 2), (0, 2), 0),
+            ('TOPPADDING', (0, 3), (0, 3), 0),
+            ('BOTTOMPADDING', (0, 3), (0, 3), 0),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        signature_block = [
+            Spacer(1, 0.25*inch),  # Move signature block further down
+            signature_table,
+            Spacer(1, 0.1*inch)
+        ]
+
+        # --- 6. Assemble Story with Conditional KeepTogether ---
+        if len(product_table_data) <= 5:  # 1 header + 4 products
+            story_content = story + signature_block
+            story = [KeepTogether(story_content)]
+        else:
+            story.extend(signature_block)
 
         doc.build(story)
         buffer.seek(0)

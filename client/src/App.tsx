@@ -14,6 +14,7 @@ type Item = {
   qty: number;
   rate: number;
   amount: number;
+  date_code: string;
 };
 
 const App: React.FC = () => {
@@ -25,6 +26,7 @@ const App: React.FC = () => {
   const [formData, setFormData] = useState<{
     customer: string;
     poNumber: string;
+    customerPurchaseNumber: string;
     invoiceNumber: string;
     invoiceDate: string;
     dueDate: string;
@@ -33,13 +35,13 @@ const App: React.FC = () => {
   }>({
     customer: '',
     poNumber: '',
+    customerPurchaseNumber: '',
     invoiceNumber: '',
     invoiceDate: '',
     dueDate: '',
     items: [],
     total: '',
   });
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [backendParsed, setBackendParsed] = useState<any>(null);
@@ -120,13 +122,15 @@ const App: React.FC = () => {
           date: formData.invoiceDate,
           due_date: formData.dueDate,
           po_number: formData.poNumber,
+          customer_purchase_number: formData.customerPurchaseNumber,
           vendor_name: formData.customer,
           total_amount: formData.total,
           line_items: formData.items.map(item => ({
             quantity: item.qty,
             description: `${item.product_code || ''} ${item.description || ''}`.trim(),
             rate: item.rate,
-            amount: item.amount
+            amount: item.amount,
+            date_code: item.date_code
           }))
         }),
       });
@@ -166,6 +170,7 @@ const App: React.FC = () => {
       setFormData({
         customer: backendParsed.vendor_name || '',
         poNumber: backendParsed.po_number || '',
+        customerPurchaseNumber: '',
         invoiceNumber: backendParsed.invoice_number || '',
         invoiceDate: backendParsed.date || '',
         dueDate: backendParsed.due_date || '',
@@ -175,6 +180,7 @@ const App: React.FC = () => {
           qty: parseInt(item.quantity, 10) || 0,
           rate: parseFloat(item.rate) || 0,
           amount: parseFloat(item.amount) || 0,
+          date_code: item.date_code || '',
         })),
         total: backendParsed.total_amount || '',
       });
@@ -236,6 +242,15 @@ const App: React.FC = () => {
             onChange={handleFormChange}
             fullWidth
             margin="normal"
+          />
+          <TextField
+            label="Customer Purchase Number"
+            name="customerPurchaseNumber"
+            value={formData.customerPurchaseNumber}
+            onChange={handleFormChange}
+            fullWidth
+            margin="normal"
+            placeholder="Enter customer purchase number (if available)"
           />
           <TextField
             label="Invoice Number"
@@ -302,6 +317,13 @@ const App: React.FC = () => {
                 onChange={e => handleFormChange(e, idx, 'amount')}
                 sx={{ width: '150px' }}
               />
+              <TextField
+                label="Date Code"
+                name="date_code"
+                value={item.date_code}
+                onChange={e => handleFormChange(e, idx, 'date_code')}
+                sx={{ width: '150px' }}
+              />
             </Box>
           ))}
           <Button
@@ -310,7 +332,7 @@ const App: React.FC = () => {
               ...formData,
               items: [
                 ...formData.items,
-                { product_code: '', description: '', qty: 0, rate: 0, amount: 0 },
+                { product_code: '', description: '', qty: 0, rate: 0, amount: 0, date_code: '' },
               ],
             })}
           >
@@ -332,19 +354,6 @@ const App: React.FC = () => {
           >
             Generate Certificate
           </Button>
-          {pdfUrl && (
-            <Box sx={{ mt: 3 }}>
-              <Button
-                variant="outlined"
-                color="secondary"
-                href={pdfUrl}
-                download="certificate.pdf"
-                target="_blank"
-              >
-                Download Certificate
-              </Button>
-            </Box>
-          )}
         </Box>
       </Box>
     ) : (
