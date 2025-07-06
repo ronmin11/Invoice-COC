@@ -146,7 +146,7 @@ const App: React.FC = () => {
       // Create a temporary link to trigger the download
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `Certificate-${formData.invoiceNumber || 'invoice'}.pdf`);
+      link.setAttribute('download', `${formData.poNumber || 'certificate'}.pdf`);
       document.body.appendChild(link);
       link.click();
       
@@ -164,9 +164,7 @@ const App: React.FC = () => {
   // Parse button handler: use backendParsed to fill formData
   const handleParse = async () => {
     if (!backendParsed) return;
-    
     try {
-      // Use the parsed data from the Python backend
       setFormData({
         customer: backendParsed.vendor_name || '',
         poNumber: backendParsed.po_number || '',
@@ -188,6 +186,14 @@ const App: React.FC = () => {
     } catch (err: any) {
       setError(err.message);
     }
+  };
+
+  // Handler to delete a product from the items list
+  const handleDeleteProduct = (idx: number) => {
+    setFormData(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== idx),
+    }));
   };
 
   return (
@@ -280,7 +286,7 @@ const App: React.FC = () => {
             Items
           </Typography>
           {formData.items.map((item, idx) => (
-            <Box key={idx} sx={{ display: 'flex', gap: 2, mb: 2, width: '100%' }}>
+            <Box key={idx} sx={{ display: 'flex', gap: 2, mb: 2, width: '100%', alignItems: 'center' }}>
               <TextField
                 label="Product Code"
                 value={item.product_code}
@@ -312,7 +318,7 @@ const App: React.FC = () => {
               <TextField
                 label="Amount"
                 name="amount"
-                type="number"
+                type="text"
                 value={item.amount}
                 onChange={e => handleFormChange(e, idx, 'amount')}
                 sx={{ width: '150px' }}
@@ -324,6 +330,14 @@ const App: React.FC = () => {
                 onChange={e => handleFormChange(e, idx, 'date_code')}
                 sx={{ width: '150px' }}
               />
+              <Button
+                variant="outlined"
+                color="error"
+                sx={{ minWidth: 40, height: 40 }}
+                onClick={() => handleDeleteProduct(idx)}
+              >
+                Delete
+              </Button>
             </Box>
           ))}
           <Button

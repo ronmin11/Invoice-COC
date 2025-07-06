@@ -43,7 +43,8 @@ try:
     tesseract_paths = [
         r'C:\Program Files\Tesseract-OCR\tesseract.exe',
         r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-        r'C:\Users\ronmi\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
+        r'C:\Users\ronmi\AppData\Local\Programs\Tesseract-OCR\tesseract.exe',
+        r'C:\Users\dimam\AppData\Local\Programs\Tesseract-OCR\tesseract.exe'
     ]
     
     tesseract_found = False
@@ -59,9 +60,11 @@ try:
         print("1. Download from: https://github.com/UB-Mannheim/tesseract/wiki")
         print("2. Install to C:\\Program Files\\Tesseract-OCR\\")
         print("3. Add to PATH or update the path in main.py")
+        print("For now, OCR functionality will be disabled.")
         
 except Exception as e:
     print(f"Error configuring Tesseract: {e}")
+    print("OCR functionality will be disabled.")
 
 class InvoiceParser:
     def __init__(self):
@@ -87,6 +90,13 @@ class InvoiceParser:
     def extract_text_from_image(self, image_path: str) -> str:
         """Extract text from image using OCR"""
         try:
+            # Check if Tesseract is available
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception:
+                print("Tesseract not available, returning placeholder text")
+                return "Tesseract OCR not available. Please install Tesseract for image processing."
+            
             # Read image
             image = cv2.imread(image_path)
             if image is None:
@@ -104,7 +114,7 @@ class InvoiceParser:
             return text.strip()
         except Exception as e:
             print(f"Error in OCR: {str(e)}")
-            return ""
+            return f"Error processing image: {str(e)}"
     
     def extract_text_from_pdf(self, pdf_path: str) -> str:
         """Extract text from PDF using multiple methods"""
@@ -153,16 +163,17 @@ class InvoiceParser:
         # --- Header and Customer Extraction based on literal text matching ---
         for i, line in enumerate(lines):
             line_lower = line.lower()
-            
-            # Find customer name on the line after "Bill to Ship to" per user instruction
             if "bill to ship to" in line_lower and i + 1 < len(lines):
                 customer_line = lines[i+1]
-                # Clean up repeated names like "Company, Inc. Company"
-                if ", Inc." in customer_line:
-                    data["vendor_name"] = customer_line.split(", Inc.")[0] + ", Inc."
-                else:
-                    data["vendor_name"] = customer_line
-            
+                # Only use the first unique name (split by space, remove duplicates)
+                customer_parts = customer_line.split()
+                seen = set()
+                unique_customer = []
+                for part in customer_parts:
+                    if part not in seen:
+                        unique_customer.append(part)
+                        seen.add(part)
+                data["vendor_name"] = ' '.join(unique_customer)
             if "invoice details po number:" in line_lower:
                 data["po_number"] = line.split(":")[-1].strip()
             if "invoice no.:" in line_lower:
@@ -174,7 +185,7 @@ class InvoiceParser:
             if line_lower.startswith("total"):
                 data["total_amount"] = line.split()[-1]
 
-        # --- Line Item Extraction based on user's rule: last 3 numbers ---
+        # --- Line Item Extraction ---
         in_item_section = False
         for line in lines:
             if "product or service" in line.lower() and "qty" in line.lower():
@@ -183,37 +194,44 @@ class InvoiceParser:
             if not in_item_section or line.lower().startswith("total") or line.lower().startswith("thank"):
                 continue
 
-            # Find all number-like words (including decimals and $)
-            all_numbers = re.findall(r"[\d\.,]+", line)
-            
-            if len(all_numbers) >= 3:
-                # Per the user, the last three numbers are Qty, Rate, and Amount
-                qty, rate, amount = all_numbers[-3], all_numbers[-2], all_numbers[-1]
-                
-                # Find where the quantity appears to split description from numbers
-                qty_index = line.rfind(qty)
-                desc_text = line[:qty_index].strip()
-                desc_text = re.sub(r"^\d+\.\s*", "", desc_text) # Remove leading "1. ", etc.
-
-                desc_parts = desc_text.split(" ", 1)
-                product_code = desc_parts[0]
-                description = desc_parts[1].strip() if len(desc_parts) > 1 else ""
-                
+            if re.match(r"^\d+\.\s", line):
+                line_wo_num = re.sub(r"^\d+\.\s*", "", line)
+                # Extract rate (first dollar value)
+                rate_match = re.search(r"\$([\d,\.]+)", line_wo_num)
+                rate = rate_match.group(1) if rate_match else ''
+                # Extract qty (last integer before the first dollar sign)
+                qty = ''
+                if rate_match:
+                    before_rate = line_wo_num[:rate_match.start()]
+                    qty_candidates = re.findall(r"\b\d{1,6}\b", before_rate)
+                    if qty_candidates:
+                        qty = qty_candidates[-1]
+                # Extract product code (up to first space or comma)
+                code_match = re.match(r"([^ ,]+)", line_wo_num)
+                product_code = code_match.group(1).strip() if code_match else ''
+                # Description: everything after product code up to qty
+                desc_start = len(product_code)
+                desc_end = line_wo_num.find(qty) if qty else len(line_wo_num)
+                description = line_wo_num[desc_start:desc_end].strip()
+                print(f"DEBUG: Parsed product_code='{product_code}', description='{description}', qty='{qty}', rate='{rate}'")
                 data["line_items"].append({
                     "product_code": product_code,
                     "description": description,
-                    "quantity": qty, "rate": rate, "amount": amount
+                    "quantity": qty,
+                    "rate": rate,
+                    "amount": ''
                 })
             elif data["line_items"]:
-                # This line is likely a multi-line description part
+                # Otherwise, treat as a continuation of the previous product's description
                 data["line_items"][-1]["description"] += f" {line.strip()}"
-        
         return data
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Upload and process invoice file"""
     try:
+        print(f"Received file: {file.filename}")
+        
         # Create uploads directory if it doesn't exist
         os.makedirs("uploads", exist_ok=True)
         
@@ -223,14 +241,20 @@ async def upload_file(file: UploadFile = File(...)):
             content = await file.read()
             buffer.write(content)
         
+        print(f"File saved to: {file_path}")
+        
         # Initialize parser
         parser = InvoiceParser()
         
         # Extract text based on file type
         if file.filename and file.filename.lower().endswith('.pdf'):
+            print("Processing PDF file")
             extracted_text = parser.extract_text_from_pdf(file_path)
         else:
+            print("Processing image file")
             extracted_text = parser.extract_text_from_image(file_path)
+        
+        print(f"Extracted text length: {len(extracted_text) if extracted_text else 0}")
         
         # Parse invoice data
         invoice_data = parser.parse_invoice_data(extracted_text)
@@ -238,9 +262,13 @@ async def upload_file(file: UploadFile = File(...)):
         # Clean up uploaded file
         os.remove(file_path)
         
+        print("File processing completed successfully")
         return JSONResponse(content=invoice_data)
         
     except Exception as e:
+        print(f"Error in upload_file: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
 
 @app.post("/generate-certificate")
